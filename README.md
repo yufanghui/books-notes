@@ -14,7 +14,7 @@ Not affiliated with Apple.
 ## Run
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/books-notes.git
+git clone https://github.com/yufanghui/books-notes.git
 cd books-notes
 python3 serve.py
 ```
