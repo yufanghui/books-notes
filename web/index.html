@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Books 笔记</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --bg-2: #fffaf2;
+      --ink: #1f1a14;
+      --muted: #6d6458;
+      --line: #e4d8c6;
+      --quote: #3f6f8a;
+      --note: #2d5a45;
+      --note-bg: #eef6f1;
+      --quote-bg: #f7f1e6;
+      --accent: #b4532a;
+      --chip: #efe4d4;
+      --shadow: 0 1px 2px rgba(40, 24, 8, .06);
+      --sidebar: 300px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #161311;
+        --bg-2: #1e1a16;
+        --ink: #f3ece3;
+        --muted: #b3a89a;
+        --line: #3a3229;
+        --quote: #8fcae0;
+        --note: #9dd4b5;
+        --note-bg: #24332b;
+        --quote-bg: #2a241c;
+        --accent: #e08b5a;
+        --chip: #2c261f;
+        --shadow: none;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font: 16px/1.65 ui-sans-serif, -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    .app { display: grid; grid-template-columns: var(--sidebar) 1fr; height: 100%; }
+    aside {
+      border-right: 1px solid var(--line);
+      background: var(--bg-2);
+      overflow: auto;
+      padding: 20px 14px 32px;
+    }
+    h1 { font-size: 15px; margin: 0 0 14px; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+    .book, .chapter, .section {
+      width: 100%; text-align: left; border: 0; background: transparent;
+      color: inherit; cursor: pointer; border-radius: 10px; padding: 8px 10px;
+    }
+    .book:hover, .chapter:hover, .section:hover { background: var(--chip); }
+    .book.active, .chapter.active, .section.active { background: var(--chip); }
+    .book .t { font-weight: 650; font-size: 14px; }
+    .book .m, .chapter .m { color: var(--muted); font-size: 12px; }
+    .chapter { padding-left: 10px; margin-top: 8px; }
+    .chapter .t { font-size: 13px; font-weight: 650; }
+    .section { padding: 5px 10px 5px 22px; margin-top: 1px; }
+    .section .t { font-size: 12.5px; color: var(--muted); font-weight: 500; }
+    .section.active .t { color: var(--ink); font-weight: 650; }
+    .page-title { font-size: 18px; font-weight: 650; margin: 0 0 18px; max-width: 820px; }
+    main { overflow: auto; padding: 28px 8vw 80px; }
+    .toolbar {
+      display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+      margin-bottom: 22px; position: sticky; top: 0; background: var(--bg);
+      padding: 8px 0 14px; z-index: 2;
+    }
+    input[type="search"] {
+      flex: 1; min-width: 180px; border: 1px solid var(--line); background: var(--bg-2);
+      color: var(--ink); border-radius: 10px; padding: 8px 12px; font: inherit;
+    }
+    button.chip {
+      border: 1px solid var(--line); background: var(--bg-2); color: var(--ink);
+      border-radius: 999px; padding: 6px 12px; cursor: pointer; font: inherit;
+    }
+    button.chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    .card {
+      background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px;
+      padding: 18px 20px; margin: 0 0 16px; box-shadow: var(--shadow);
+      max-width: 820px;
+    }
+    .card.s1 { border-left: 4px solid #67a16c; }
+    .card.s2 { border-left: 4px solid #5b8fd4; }
+    .card.s3 { border-left: 4px solid #d1a54a; }
+    .card.s4 { border-left: 4px solid #d57aa2; }
+    .card.s5 { border-left: 4px solid #8b7cc9; }
+    .sec { font-size: 12px; color: var(--accent); font-weight: 650; margin-bottom: 8px; }
+    .quote {
+      white-space: pre-wrap; background: var(--quote-bg); color: var(--ink);
+      padding: 12px 14px; border-radius: 10px; margin: 0 0 12px;
+    }
+    .note {
+      white-space: pre-wrap; background: var(--note-bg); color: var(--ink);
+      padding: 12px 14px; border-radius: 10px; margin: 0;
+    }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+    .meta { margin-top: 10px; color: var(--muted); font-size: 12px; }
+    .empty, .error { color: var(--muted); max-width: 640px; }
+    .count { float: right; color: var(--muted); font-size: 12px; }
+    @media (max-width: 860px) {
+      .app { grid-template-columns: 1fr; }
+      aside { height: auto; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside id="nav"></aside>
+    <main>
+      <div class="toolbar">
+        <input id="q" type="search" placeholder="搜索原文或评论" />
+        <button class="chip on" id="notesOnly" type="button">只看有评论</button>
+        <button class="chip" id="refresh" type="button">刷新</button>
+        <button class="chip" id="lang" type="button">EN</button>
+      </div>
+      <div id="content" class="empty">正在读取 Books 笔记库…</div>
+    </main>
+  </div>
+  <script>
+    const I18N = {
+      zh: {
+        title: "Books 笔记",
+        books: "书籍",
+        chapters: "章节",
+        allChapters: "全部章节",
+        meta: (n, h) => `${n} 评 / ${h} 划`,
+        search: "搜索原文或评论",
+        notesOnly: "只看有评论",
+        refresh: "刷新",
+        quote: "原文",
+        note: "评论",
+        loading: "正在读取 Books 笔记库…",
+        emptyBook: "没有找到划线或评论。",
+        emptySection: "这一节没有符合条件的条目。关掉「只看有评论」，或换一节。",
+        loadError: (e) => `读库失败：${e}`,
+        langBtn: "EN",
+      },
+      en: {
+        title: "Books Notes",
+        books: "Books",
+        chapters: "Chapters",
+        allChapters: "All chapters",
+        meta: (n, h) => `${n} notes / ${h} highlights`,
+        search: "Search quotes and notes",
+        notesOnly: "Notes only",
+        refresh: "Refresh",
+        quote: "Quote",
+        note: "Note",
+        loading: "Reading the Apple Books library…",
+        emptyBook: "No highlights or notes found.",
+        emptySection: "Nothing in this section. Turn off Notes only, or pick another section.",
+        loadError: (e) => `Could not read the library: ${e}`,
+        langBtn: "中文",
+      },
+    };
+
+    const savedLang = localStorage.getItem("books-notes-lang");
+    const state = {
+      data: null,
+      bookId: null,
+      chapterId: "all",
+      section: "",
+      notesOnly: true,
+      q: "",
+      lang: savedLang || (navigator.language.startsWith("zh") ? "zh" : "en"),
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const t = (key, ...args) => {
+      const value = I18N[state.lang][key];
+      return typeof value === "function" ? value(...args) : value;
+    };
+
+    function applyChrome() {
+      document.documentElement.lang = state.lang === "zh" ? "zh-CN" : "en";
+      document.title = t("title");
+      $("q").placeholder = t("search");
+      $("notesOnly").textContent = t("notesOnly");
+      $("refresh").textContent = t("refresh");
+      $("lang").textContent = t("langBtn");
+    }
+
+    function fmt(iso) {
+      if (!iso) return "";
+      return iso.replace("T", " ").slice(0, 16);
+    }
+
+    function currentBook() {
+      return (state.data?.books || []).find((b) => b.id === state.bookId) || state.data?.books?.[0];
+    }
+
+    function itemCount(items) {
+      return items.filter((i) => !state.notesOnly || i.note).length;
+    }
+
+    function uniqueSections(ch) {
+      const names = [];
+      for (const item of ch.items) {
+        if (item.section && !names.includes(item.section)) names.push(item.section);
+      }
+      return names;
+    }
+
+    function visibleItems(book) {
+      const q = state.q.trim().toLowerCase();
+      const chapters = state.chapterId === "all"
+        ? book.chapters
+        : book.chapters.filter((c) => c.id === state.chapterId);
+      const out = [];
+      for (const ch of chapters) {
+        for (const item of ch.items) {
+          if (state.notesOnly && !item.note) continue;
+          if (state.section && item.section !== state.section) continue;
+          const blob = `${item.quote}\n${item.note}\n${item.section}\n${ch.title}`.toLowerCase();
+          if (q && !blob.includes(q)) continue;
+          out.push({ ...item, chapter: ch.title });
+        }
+      }
+      return out;
+    }
+
+    function pageTitle(book) {
+      if (state.chapterId === "all") return t("allChapters");
+      const ch = book.chapters.find((c) => c.id === state.chapterId);
+      if (!ch) return "";
+      return state.section ? `${ch.title} · ${state.section}` : ch.title;
+    }
+
+    function renderNav(book) {
+      const books = state.data.books;
+      const parts = [`<h1>${t("books")}</h1>`];
+      for (const b of books) {
+        const on = b.id === book.id ? " active" : "";
+        parts.push(`<button class="book${on}" data-book="${b.id}">
+          <div class="t">${esc(b.title)}</div>
+          <div class="m">${esc(b.author)} · ${t("meta", b.noteCount, b.highlightCount)}</div>
+        </button>`);
+      }
+      parts.push(`<h1 style='margin-top:18px'>${t("chapters")}</h1>`);
+      const allCount = itemCount(book.chapters.flatMap((c) => c.items));
+      parts.push(`<button class="chapter${state.chapterId === "all" ? " active" : ""}" data-ch="all" data-sec="">
+        <div class="t">${t("allChapters")} <span class="count">${allCount}</span></div>
+      </button>`);
+      for (const ch of book.chapters) {
+        const n = itemCount(ch.items);
+        if (n === 0) continue;
+        const chOn = state.chapterId === ch.id && !state.section;
+        parts.push(`<button class="chapter${chOn ? " active" : ""}" data-ch="${esc(ch.id)}" data-sec="">
+          <div class="t">${esc(ch.title)} <span class="count">${n}</span></div>
+        </button>`);
+        for (const sec of uniqueSections(ch)) {
+          const sn = itemCount(ch.items.filter((i) => i.section === sec));
+          if (sn === 0) continue;
+          const on = state.chapterId === ch.id && state.section === sec;
+          parts.push(`<button class="section${on ? " active" : ""}" data-ch="${esc(ch.id)}" data-sec="${esc(sec)}">
+            <div class="t">${esc(sec)} <span class="count">${sn}</span></div>
+          </button>`);
+        }
+      }
+      $("nav").innerHTML = parts.join("");
+      $("nav").querySelectorAll("[data-book]").forEach((el) => {
+        el.onclick = () => {
+          state.bookId = el.dataset.book;
+          state.chapterId = "all";
+          state.section = "";
+          render();
+        };
+      });
+      $("nav").querySelectorAll("[data-ch]").forEach((el) => {
+        el.onclick = () => {
+          state.chapterId = el.dataset.ch;
+          state.section = el.dataset.sec || "";
+          render();
+        };
+      });
+    }
+
+    function renderMain(book) {
+      const items = visibleItems(book);
+      const title = `<h2 class="page-title">${esc(pageTitle(book))}</h2>`;
+      if (!items.length) {
+        $("content").innerHTML = `${title}<p class="empty">${t("emptySection")}</p>`;
+        return;
+      }
+      $("content").innerHTML = title + items.map((item) => `
+        <article class="card s${item.style || 0}">
+          <div class="sec">${esc(item.chapter)}${item.section ? " · " + esc(item.section) : ""}</div>
+          ${item.quote ? `<div class="label">${t("quote")}</div><div class="quote">${esc(item.quote)}</div>` : ""}
+          ${item.note ? `<div class="label">${t("note")}</div><div class="note">${esc(item.note)}</div>` : ""}
+          <div class="meta">${fmt(item.created)}</div>
+        </article>
+      `).join("");
+    }
+
+    function render() {
+      applyChrome();
+      const book = currentBook();
+      if (!book) {
+        $("content").innerHTML = `<p class="empty">${t("emptyBook")}</p>`;
+        return;
+      }
+      state.bookId = book.id;
+      renderNav(book);
+      renderMain(book);
+    }
+
+    function esc(s) {
+      return String(s ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    async function load() {
+      applyChrome();
+      $("content").textContent = t("loading");
+      const res = await fetch("/api/data", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) {
+        $("content").innerHTML = `<p class="error">${esc(t("loadError", data.error || res.status))}</p>`;
+        return;
+      }
+      state.data = data;
+      if (!state.bookId && data.books[0]) state.bookId = data.books[0].id;
+      render();
+    }
+
+    $("notesOnly").onclick = () => {
+      state.notesOnly = !state.notesOnly;
+      $("notesOnly").classList.toggle("on", state.notesOnly);
+      render();
+    };
+    $("lang").onclick = () => {
+      state.lang = state.lang === "zh" ? "en" : "zh";
+      localStorage.setItem("books-notes-lang", state.lang);
+      render();
+    };
+    $("refresh").onclick = load;
+    $("q").addEventListener("input", (e) => { state.q = e.target.value; render(); });
+    load();
+  </script>
+</body>
+</html>
