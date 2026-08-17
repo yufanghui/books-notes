@@ -34,6 +34,24 @@ def latest_sqlite(directory: Path) -> Path:
     return files[0]
 
 
+def library_revision() -> str:
+    """Cheap fingerprint of Books sqlite files so the UI can auto-reload."""
+    parts: list[str] = []
+    for directory in (ANN_DIR, LIB_DIR):
+        if not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            name = path.name
+            if not (name.endswith(".sqlite") or name.endswith(".sqlite-wal")):
+                continue
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            parts.append(f"{name}:{st.st_mtime_ns}:{st.st_size}")
+    return "|".join(sorted(parts))
+
+
 def readonly_backup(path: Path) -> sqlite3.Connection:
     mem = sqlite3.connect(":memory:")
     src = sqlite3.connect(f"file:{path}?mode=ro", uri=True)

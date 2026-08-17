@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,7 +14,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "skills" / "apple-books-notes" / "scripts"))
-from query import load_library  # noqa: E402
+from query import library_revision, load_library  # noqa: E402
 
 WEB_DIR = ROOT / "web"
 HOST = "127.0.0.1"
@@ -21,6 +22,8 @@ HOST = "127.0.0.1"
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
+        if self.path.startswith("/api/events"):
+            return
         print(f"[books-notes] {fmt % args}")
 
     def _send(self, status: int, body: bytes, content_type: str) -> None:
@@ -30,6 +33,31 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _stream_events(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        last_seen = None
+        last_change = 0.0
+        sent = None
+        try:
+            while True:
+                rev = library_revision()
+                now = time.monotonic()
+                if rev != last_seen:
+                    last_seen = rev
+                    last_change = now
+                elif sent != last_seen and now - last_change >= 0.45:
+                    sent = last_seen
+                    payload = json.dumps({"rev": sent}, ensure_ascii=False)
+                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                time.sleep(0.4)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+            return
 
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
@@ -43,6 +71,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 err = json.dumps({"error": str(exc)}, ensure_ascii=False).encode("utf-8")
                 self._send(500, err, "application/json; charset=utf-8")
+            return
+        if path == "/api/revision":
+            body = json.dumps({"rev": library_revision()}, ensure_ascii=False).encode("utf-8")
+            self._send(200, body, "application/json; charset=utf-8")
+            return
+        if path == "/api/events":
+            self._stream_events()
             return
         self._send(404, b"not found", "text/plain; charset=utf-8")
 
@@ -58,7 +93,7 @@ def main() -> None:
     server = ThreadingHTTPServer((HOST, args.port), Handler)
     url = f"http://{HOST}:{args.port}/"
     print(f"Books notes: {url}", flush=True)
-    print("Keep this terminal open. Click Refresh in the page after new highlights.", flush=True)
+    print("Keep this terminal open. Notes auto-refresh when Apple Books saves.", flush=True)
     if not args.no_open:
         webbrowser.open(url)
     try:

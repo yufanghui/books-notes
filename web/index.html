@@ -125,6 +125,13 @@
     .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
     .modal-actions .chip { cursor: pointer; }
     .count { float: right; color: var(--muted); font-size: 12px; }
+    .toast {
+      position: fixed; right: 22px; bottom: 22px; z-index: 30;
+      background: var(--ink); color: var(--bg); border-radius: 999px;
+      padding: 8px 14px; font-size: 13px; opacity: 0; pointer-events: none;
+      transition: opacity .25s ease;
+    }
+    .toast.show { opacity: 1; }
     @media (max-width: 860px) {
       .app { grid-template-columns: 1fr; }
       aside { height: auto; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
@@ -144,6 +151,7 @@
       <div id="content" class="empty">正在读取 Books 笔记库…</div>
     </main>
   </div>
+  <div class="toast" id="toast" role="status"></div>
   <div class="modal" id="shareModal" role="dialog" aria-modal="true">
     <div class="modal-card">
       <img id="sharePreview" alt="" />
@@ -179,6 +187,7 @@
         download: "下载",
         close: "关闭",
         shareAlt: "笔记分享图",
+        synced: "已同步",
       },
       en: {
         title: "Books Notes",
@@ -203,10 +212,12 @@
         download: "Download",
         close: "Close",
         shareAlt: "Shared note image",
+        synced: "Updated",
       },
     };
 
     const savedLang = localStorage.getItem("books-notes-lang");
+    const VIEW_KEY = "books-notes-view";
     const state = {
       data: null,
       bookId: null,
@@ -217,6 +228,10 @@
       lang: savedLang || (navigator.language.startsWith("zh") ? "zh" : "en"),
       shareBlob: null,
       shareUrl: "",
+      _scroll: { main: 0, nav: 0 },
+      rev: null,
+      loading: false,
+      pendingLoad: false,
     };
 
     const $ = (id) => document.getElementById(id);
@@ -230,6 +245,8 @@
       document.title = t("title");
       $("q").placeholder = t("search");
       $("notesOnly").textContent = t("notesOnly");
+      $("notesOnly").classList.toggle("on", state.notesOnly);
+      $("q").value = state.q;
       $("refresh").textContent = t("refresh");
       $("lang").textContent = t("langBtn");
       $("copyImage").textContent = t("copyImage");
@@ -257,6 +274,47 @@
         if (item.section && !names.includes(item.section)) names.push(item.section);
       }
       return names;
+    }
+
+    function saveView() {
+      const main = document.querySelector("main");
+      const aside = document.querySelector("aside");
+      localStorage.setItem(VIEW_KEY, JSON.stringify({
+        bookId: state.bookId,
+        chapterId: state.chapterId,
+        section: state.section,
+        notesOnly: state.notesOnly,
+        q: state.q,
+        mainScroll: main ? main.scrollTop : 0,
+        navScroll: aside ? aside.scrollTop : 0,
+      }));
+    }
+
+    function restoreView(data) {
+      let saved = {};
+      try {
+        saved = JSON.parse(localStorage.getItem(VIEW_KEY) || "{}");
+      } catch {
+        saved = {};
+      }
+      const books = data.books || [];
+      const book = books.find((b) => b.id === saved.bookId) || books[0];
+      state.bookId = book?.id || null;
+      const ch = book?.chapters?.find((c) => c.id === saved.chapterId);
+      state.chapterId = ch ? saved.chapterId : "all";
+      state.section = ch && saved.section && uniqueSections(ch).includes(saved.section)
+        ? saved.section
+        : "";
+      if (typeof saved.notesOnly === "boolean") state.notesOnly = saved.notesOnly;
+      if (typeof saved.q === "string") state.q = saved.q;
+      state._scroll = { main: saved.mainScroll || 0, nav: saved.navScroll || 0 };
+    }
+
+    function applyScroll() {
+      const aside = document.querySelector("aside");
+      const main = document.querySelector("main");
+      if (aside) aside.scrollTop = state._scroll.nav || 0;
+      if (main) main.scrollTop = state._scroll.main || 0;
     }
 
     function visibleItems(book) {
@@ -321,6 +379,7 @@
           state.bookId = el.dataset.book;
           state.chapterId = "all";
           state.section = "";
+          state._scroll.main = 0;
           render();
         };
       });
@@ -328,6 +387,7 @@
         el.onclick = () => {
           state.chapterId = el.dataset.ch;
           state.section = el.dataset.sec || "";
+          state._scroll.main = 0;
           render();
         };
       });
@@ -366,6 +426,8 @@
       state.bookId = book.id;
       renderNav(book);
       renderMain(book);
+      applyScroll();
+      saveView();
     }
 
     function wrapLines(ctx, text, maxWidth) {
@@ -500,6 +562,7 @@
         URL.revokeObjectURL(state.shareUrl);
         state.shareUrl = "";
       }
+      if (state.pendingLoad) load({ silent: true });
     }
 
     async function copyShareImage() {
@@ -532,23 +595,90 @@
         .replaceAll('"', "&quot;");
     }
 
-    async function load() {
-      applyChrome();
-      $("content").textContent = t("loading");
-      const res = await fetch("/api/data", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) {
-        $("content").innerHTML = `<p class="error">${esc(t("loadError", data.error || res.status))}</p>`;
+    function flashSynced() {
+      const el = $("toast");
+      el.textContent = t("synced");
+      el.classList.add("show");
+      clearTimeout(flashSynced._t);
+      flashSynced._t = setTimeout(() => el.classList.remove("show"), 1400);
+    }
+
+    async function load(opts = {}) {
+      const silent = !!opts.silent;
+      if (state.loading) {
+        state.pendingLoad = true;
         return;
       }
-      state.data = data;
-      if (!state.bookId && data.books[0]) state.bookId = data.books[0].id;
-      render();
+      if (silent && $("shareModal").classList.contains("show")) {
+        state.pendingLoad = true;
+        return;
+      }
+      state.loading = true;
+      state.pendingLoad = false;
+      try {
+        if (state.data) saveView();
+        if (!silent) {
+          applyChrome();
+          $("content").textContent = t("loading");
+        }
+        const res = await fetch("/api/data", { cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok) {
+          if (!silent) {
+            $("content").innerHTML = `<p class="error">${esc(t("loadError", data.error || res.status))}</p>`;
+          }
+          return;
+        }
+        state.data = data;
+        restoreView(data);
+        render();
+        if (silent) flashSynced();
+      } finally {
+        state.loading = false;
+        if (state.pendingLoad) {
+          state.pendingLoad = false;
+          load({ silent: true });
+        }
+      }
+    }
+
+    function onLibraryChange(rev) {
+      if (state.rev == null) {
+        state.rev = rev;
+        return;
+      }
+      if (rev === state.rev) return;
+      state.rev = rev;
+      load({ silent: true });
+    }
+
+    function startWatch() {
+      if (window.EventSource) {
+        const es = new EventSource("/api/events");
+        es.onmessage = (ev) => {
+          try {
+            onLibraryChange(JSON.parse(ev.data).rev);
+          } catch {
+            /* ignore malformed events */
+          }
+        };
+        return;
+      }
+      setInterval(async () => {
+        try {
+          const res = await fetch("/api/revision", { cache: "no-store" });
+          const data = await res.json();
+          if (res.ok) onLibraryChange(data.rev);
+        } catch {
+          /* ignore poll errors */
+        }
+      }, 2000);
     }
 
     $("notesOnly").onclick = () => {
       state.notesOnly = !state.notesOnly;
       $("notesOnly").classList.toggle("on", state.notesOnly);
+      state._scroll.main = 0;
       render();
     };
     $("lang").onclick = () => {
@@ -557,7 +687,20 @@
       render();
     };
     $("refresh").onclick = load;
-    $("q").addEventListener("input", (e) => { state.q = e.target.value; render(); });
+    $("q").addEventListener("input", (e) => {
+      state.q = e.target.value;
+      state._scroll.main = 0;
+      render();
+    });
+    let scrollTimer = 0;
+    document.querySelector("main").addEventListener("scroll", () => {
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(saveView, 120);
+    });
+    document.querySelector("aside").addEventListener("scroll", () => {
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(saveView, 120);
+    });
     $("copyImage").onclick = copyShareImage;
     $("downloadImage").onclick = downloadShareImage;
     $("closeShare").onclick = closeShare;
@@ -568,6 +711,7 @@
       if (e.key === "Escape" && $("shareModal").classList.contains("show")) closeShare();
     });
     load();
+    startWatch();
   </script>
 </body>
 </html>

@@ -38,7 +38,7 @@ python3 skills/apple-books-notes/scripts/query.py --list
 python3 skills/apple-books-notes/scripts/query.py --book "Swift" --notes-only
 ```
 
-If the page or script cannot read the library, grant **Full Disk Access** to Terminal (or iTerm / Cursor) in System Settings → Privacy & Security, open the Books app once, and retry.
+If the page or script cannot read the library, grant **Full Disk Access** to Terminal (or iTerm / Cursor) in System Settings → Privacy & Security, open the Books app once, and retry. Keep `serve.py` running: the page watches the Books database and reloads when you add or delete a note.
 
 ## What you get
 
