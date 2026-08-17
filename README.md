@@ -1,17 +1,22 @@
 # Apple Books Notes
 
-A local notes browser for [Apple Books](https://www.apple.com/apple-books/) on macOS.
+A local notes browser **and agent skill** for [Apple Books](https://www.apple.com/apple-books/) on macOS.
 
-The Books sidebar truncates both the highlighted passage and your comment, and clicking an item jumps into the book. This tool reads the **full** text from the local SQLite databases and shows it as a list: book → chapter → section. Nothing is uploaded. The Books database is opened read-only.
+The Books sidebar truncates both the highlighted passage and your comment, and clicking an item jumps into the book. This tool reads the **full** text from the local SQLite databases.
 
 Not affiliated with Apple.
 
-## Requirements
+## Agent skill (recommended)
 
-- macOS (Apple Books installed, with at least one highlight or note)
-- Python 3.9+ (stdlib only, no pip packages)
+Install into Cursor / Claude Code / Codex and ask in chat: “复习《Swift 异步与并发编程》协作式任务取消这一章的笔记”.
 
-## Run
+```bash
+npx skills add yufanghui/books-notes -g
+```
+
+The skill runs `skills/apple-books-notes/scripts/query.py` (Python 3 stdlib, no pip). It lists books and returns full quotes + comments filtered by book / chapter / section.
+
+## Visual browser
 
 ```bash
 git clone https://github.com/yufanghui/books-notes.git
@@ -19,14 +24,21 @@ cd books-notes
 python3 serve.py
 ```
 
-Then open [http://127.0.0.1:8765/](http://127.0.0.1:8765/).
+Open [http://127.0.0.1:8765/](http://127.0.0.1:8765/).
 
 ```text
 python3 serve.py --port 8765      # change port
 python3 serve.py --no-open        # do not launch a browser
 ```
 
-If the page cannot read the library, grant **Full Disk Access** to Terminal (or iTerm / Cursor) in System Settings → Privacy & Security, open the Books app once, and click Refresh.
+Query from the terminal without the UI:
+
+```text
+python3 skills/apple-books-notes/scripts/query.py --list
+python3 skills/apple-books-notes/scripts/query.py --book "Swift" --notes-only
+```
+
+If the page or script cannot read the library, grant **Full Disk Access** to Terminal (or iTerm / Cursor) in System Settings → Privacy & Security, open the Books app once, and retry.
 
 ## What you get
 
@@ -36,6 +48,7 @@ If the page cannot read the library, grant **Full Disk Access** to Terminal (or 
 - Filter to notes-only, and search across quote + comment
 - Share a note as an image, preview it, and copy the image
 - Chinese / English UI (follows the browser language, toggle in the toolbar)
+- Agent skill for chapter review in chat
 
 ## How it works
 
@@ -64,10 +77,9 @@ MIT
 
 # 中文
 
-Apple Books 侧栏会截断原文和评论，点进去还会跳页。这个本地页从 Books 的 SQLite 里读完整划线和评论，按书 / 大章 / 小章浏览，不会跳走。
+Apple Books 侧栏会截断原文和评论，点进去还会跳页。这个仓库提供：
 
-```bash
-python3 serve.py
-```
+1. **Skill**：`npx skills add yufanghui/books-notes -g` 之后，在对话里让 AI 按书/章/节取出完整原文和评论。
+2. **本地网页**：`python3 serve.py`，按章节浏览，还可生成分享图。
 
-读完一章后点「刷新」。默认「只看有评论」。读库失败时，给终端开一下「完全磁盘访问权限」。
+读库失败时，给终端 / Cursor 开一下「完全磁盘访问权限」。
