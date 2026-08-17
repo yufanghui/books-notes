@@ -34,6 +34,7 @@ If the page cannot read the library, grant **Full Disk Access** to Terminal (or 
 - Nested table of contents from EPUB locations (chapter and subsection)
 - Click a subsection to see only that subsection
 - Filter to notes-only, and search across quote + comment
+- Share a note as an image, preview it, and copy the image
 - Chinese / English UI (follows the browser language, toggle in the toolbar)
 
 ## How it works

@@ -100,8 +100,30 @@
       padding: 12px 14px; border-radius: 10px; margin: 0;
     }
     .label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
-    .meta { margin-top: 10px; color: var(--muted); font-size: 12px; }
+    .meta {
+      margin-top: 10px; color: var(--muted); font-size: 12px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    }
+    .share-btn {
+      border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+      border-radius: 999px; padding: 4px 12px; cursor: pointer; font: inherit; font-size: 12px;
+    }
+    .share-btn:hover { background: var(--chip); }
     .empty, .error { color: var(--muted); max-width: 640px; }
+    .modal {
+      display: none; position: fixed; inset: 0; z-index: 20;
+      background: rgba(20, 14, 8, .45); align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .modal.show { display: flex; }
+    .modal-card {
+      background: var(--bg-2); color: var(--ink); border-radius: 16px;
+      padding: 18px; max-width: min(720px, 100%); max-height: 92vh;
+      overflow: auto; box-shadow: 0 16px 40px rgba(20, 14, 8, .25);
+    }
+    .modal-card img { display: block; width: 100%; height: auto; border-radius: 10px; background: #fff; }
+    .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .modal-actions .chip { cursor: pointer; }
     .count { float: right; color: var(--muted); font-size: 12px; }
     @media (max-width: 860px) {
       .app { grid-template-columns: 1fr; }
@@ -122,6 +144,16 @@
       <div id="content" class="empty">正在读取 Books 笔记库…</div>
     </main>
   </div>
+  <div class="modal" id="shareModal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <img id="sharePreview" alt="" />
+      <div class="modal-actions">
+        <button class="chip on" id="copyImage" type="button">复制图片</button>
+        <button class="chip" id="downloadImage" type="button">下载</button>
+        <button class="chip" id="closeShare" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
   <script>
     const I18N = {
       zh: {
@@ -140,6 +172,13 @@
         emptySection: "这一节没有符合条件的条目。关掉「只看有评论」，或换一节。",
         loadError: (e) => `读库失败：${e}`,
         langBtn: "EN",
+        share: "分享",
+        copyImage: "复制图片",
+        copied: "已复制",
+        copyFailed: "复制失败，请改用下载",
+        download: "下载",
+        close: "关闭",
+        shareAlt: "笔记分享图",
       },
       en: {
         title: "Books Notes",
@@ -157,6 +196,13 @@
         emptySection: "Nothing in this section. Turn off Notes only, or pick another section.",
         loadError: (e) => `Could not read the library: ${e}`,
         langBtn: "中文",
+        share: "Share",
+        copyImage: "Copy image",
+        copied: "Copied",
+        copyFailed: "Copy failed. Download instead.",
+        download: "Download",
+        close: "Close",
+        shareAlt: "Shared note image",
       },
     };
 
@@ -169,6 +215,8 @@
       notesOnly: true,
       q: "",
       lang: savedLang || (navigator.language.startsWith("zh") ? "zh" : "en"),
+      shareBlob: null,
+      shareUrl: "",
     };
 
     const $ = (id) => document.getElementById(id);
@@ -184,6 +232,10 @@
       $("notesOnly").textContent = t("notesOnly");
       $("refresh").textContent = t("refresh");
       $("lang").textContent = t("langBtn");
+      $("copyImage").textContent = t("copyImage");
+      $("downloadImage").textContent = t("download");
+      $("closeShare").textContent = t("close");
+      $("sharePreview").alt = t("shareAlt");
     }
 
     function fmt(iso) {
@@ -288,14 +340,20 @@
         $("content").innerHTML = `${title}<p class="empty">${t("emptySection")}</p>`;
         return;
       }
-      $("content").innerHTML = title + items.map((item) => `
+      $("content").innerHTML = title + items.map((item, idx) => `
         <article class="card s${item.style || 0}">
           <div class="sec">${esc(item.chapter)}${item.section ? " · " + esc(item.section) : ""}</div>
           ${item.quote ? `<div class="label">${t("quote")}</div><div class="quote">${esc(item.quote)}</div>` : ""}
           ${item.note ? `<div class="label">${t("note")}</div><div class="note">${esc(item.note)}</div>` : ""}
-          <div class="meta">${fmt(item.created)}</div>
+          <div class="meta">
+            <span>${fmt(item.created)}</span>
+            <button class="share-btn" type="button" data-share="${idx}">${t("share")}</button>
+          </div>
         </article>
       `).join("");
+      $("content").querySelectorAll("[data-share]").forEach((el) => {
+        el.onclick = () => openShare(items[Number(el.dataset.share)], book);
+      });
     }
 
     function render() {
@@ -308,6 +366,162 @@
       state.bookId = book.id;
       renderNav(book);
       renderMain(book);
+    }
+
+    function wrapLines(ctx, text, maxWidth) {
+      const lines = [];
+      for (const para of String(text || "").split("\n")) {
+        if (!para) {
+          lines.push("");
+          continue;
+        }
+        let line = "";
+        for (const ch of para) {
+          const next = line + ch;
+          if (line && ctx.measureText(next).width > maxWidth) {
+            lines.push(line);
+            line = ch;
+          } else {
+            line = next;
+          }
+        }
+        if (line) lines.push(line);
+      }
+      return lines;
+    }
+
+    function drawShareCard(item, book) {
+      const dpr = 2;
+      const width = 720;
+      const pad = 40;
+      const measure = document.createElement("canvas").getContext("2d");
+      const fontQuote = '400 22px "PingFang SC", "Songti SC", serif';
+      const fontNote = '400 20px "PingFang SC", "Noto Sans SC", sans-serif';
+      const fontMeta = '600 13px "PingFang SC", sans-serif';
+      const fontTitle = '650 18px "PingFang SC", sans-serif';
+      const inner = width - pad * 2;
+      measure.font = fontQuote;
+      const quoteLines = item.quote ? wrapLines(measure, item.quote, inner - 36) : [];
+      measure.font = fontNote;
+      const noteLines = item.note ? wrapLines(measure, item.note, inner - 36) : [];
+      const quoteH = quoteLines.length ? 56 + quoteLines.length * 34 : 0;
+      const noteH = noteLines.length ? 56 + noteLines.length * 32 : 0;
+      const height = pad + (book.author ? 106 : 86) + (quoteH ? quoteH + 16 : 0) + (noteH || 0) + pad + 12;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(dpr, dpr);
+
+      ctx.fillStyle = "#f4efe6";
+      ctx.fillRect(0, 0, width, height);
+      roundRect(ctx, 24, 24, width - 48, height - 48, 18, "#fffaf2");
+
+      let y = pad + 8;
+      ctx.fillStyle = "#6d6458";
+      ctx.font = fontMeta;
+      ctx.fillText("APPLE BOOKS NOTES", pad, y);
+      y += 32;
+      ctx.fillStyle = "#1f1a14";
+      ctx.font = fontTitle;
+      ctx.fillText(fit(ctx, book.title || "", inner), pad, y);
+      y += 22;
+      if (book.author) {
+        ctx.fillStyle = "#6d6458";
+        ctx.font = fontMeta;
+        ctx.fillText(fit(ctx, book.author, inner), pad, y);
+        y += 20;
+      }
+      const loc = [item.chapter, item.section].filter(Boolean).join(" · ");
+      ctx.fillStyle = "#b4532a";
+      ctx.font = fontMeta;
+      ctx.fillText(fit(ctx, loc, inner), pad, y);
+      y += 26;
+
+      if (quoteLines.length) {
+        roundRect(ctx, pad, y, inner, quoteH, 12, "#f7f1e6");
+        ctx.fillStyle = "#6d6458";
+        ctx.font = fontMeta;
+        ctx.fillText(t("quote").toUpperCase(), pad + 18, y + 22);
+        ctx.fillStyle = "#1f1a14";
+        ctx.font = fontQuote;
+        quoteLines.forEach((line, i) => ctx.fillText(line, pad + 18, y + 52 + i * 34));
+        y += quoteH + 16;
+      }
+      if (noteLines.length) {
+        roundRect(ctx, pad, y, inner, noteH, 12, "#eef6f1");
+        ctx.fillStyle = "#6d6458";
+        ctx.font = fontMeta;
+        ctx.fillText(t("note").toUpperCase(), pad + 18, y + 22);
+        ctx.fillStyle = "#1f1a14";
+        ctx.font = fontNote;
+        noteLines.forEach((line, i) => ctx.fillText(line, pad + 18, y + 52 + i * 32));
+      }
+      return canvas;
+    }
+
+    function roundRect(ctx, x, y, w, h, r, fill) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
+
+    function fit(ctx, text, maxWidth) {
+      if (ctx.measureText(text).width <= maxWidth) return text;
+      let out = text;
+      while (out.length && ctx.measureText(`${out}…`).width > maxWidth) out = out.slice(0, -1);
+      return `${out}…`;
+    }
+
+    function canvasToBlob(canvas) {
+      return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    }
+
+    async function openShare(item, book) {
+      if (state.shareUrl) URL.revokeObjectURL(state.shareUrl);
+      const canvas = drawShareCard(item, book);
+      state.shareBlob = await canvasToBlob(canvas);
+      state.shareUrl = URL.createObjectURL(state.shareBlob);
+      $("sharePreview").src = state.shareUrl;
+      $("copyImage").textContent = t("copyImage");
+      $("shareModal").classList.add("show");
+    }
+
+    function closeShare() {
+      $("shareModal").classList.remove("show");
+      if (state.shareUrl) {
+        URL.revokeObjectURL(state.shareUrl);
+        state.shareUrl = "";
+      }
+    }
+
+    async function copyShareImage() {
+      if (!state.shareBlob) return;
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ "image/png": Promise.resolve(state.shareBlob) }),
+        ]);
+        $("copyImage").textContent = t("copied");
+        setTimeout(() => { $("copyImage").textContent = t("copyImage"); }, 1600);
+      } catch {
+        $("copyImage").textContent = t("copyFailed");
+        setTimeout(() => { $("copyImage").textContent = t("copyImage"); }, 2200);
+      }
+    }
+
+    function downloadShareImage() {
+      if (!state.shareUrl) return;
+      const a = document.createElement("a");
+      a.href = state.shareUrl;
+      a.download = "books-note.png";
+      a.click();
     }
 
     function esc(s) {
@@ -344,6 +558,15 @@
     };
     $("refresh").onclick = load;
     $("q").addEventListener("input", (e) => { state.q = e.target.value; render(); });
+    $("copyImage").onclick = copyShareImage;
+    $("downloadImage").onclick = downloadShareImage;
+    $("closeShare").onclick = closeShare;
+    $("shareModal").addEventListener("click", (e) => {
+      if (e.target === $("shareModal")) closeShare();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && $("shareModal").classList.contains("show")) closeShare();
+    });
     load();
   </script>
 </body>
