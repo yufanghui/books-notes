@@ -64,6 +64,19 @@
     .section { padding: 5px 10px 5px 22px; margin-top: 1px; }
     .section .t { font-size: 12.5px; color: var(--muted); font-weight: 500; }
     .section.active .t { color: var(--ink); font-weight: 650; }
+    .toc {
+      width: 100%; text-align: left; border: 0; background: transparent;
+      color: inherit; cursor: pointer; border-radius: 10px; padding: 5px 10px; margin-top: 1px;
+    }
+    .toc:hover, .toc.active { background: var(--chip); }
+    .toc .t { font-size: 12.5px; }
+    .toc.d0 { margin-top: 8px; padding-left: 10px; }
+    .toc.d0 .t { font-size: 13px; font-weight: 650; }
+    .toc.d1 { padding-left: 22px; }
+    .toc.d2 { padding-left: 34px; color: var(--muted); }
+    .toc.d3 { padding-left: 46px; color: var(--muted); font-size: 12px; }
+    .toc.d4, .toc.d5 { padding-left: 58px; color: var(--muted); font-size: 12px; }
+    .toc.active .t { color: var(--ink); font-weight: 650; }
     .page-title { font-size: 18px; font-weight: 650; margin: 0 0 18px; max-width: 820px; }
     main { overflow: auto; padding: 28px 8vw 80px; }
     .toolbar {
@@ -109,6 +122,7 @@
       border-radius: 999px; padding: 4px 12px; cursor: pointer; font: inherit; font-size: 12px;
     }
     .share-btn:hover { background: var(--chip); }
+    .meta-actions { display: flex; gap: 6px; flex-shrink: 0; }
     .empty, .error { color: var(--muted); max-width: 640px; }
     .modal {
       display: none; position: fixed; inset: 0; z-index: 20;
@@ -181,9 +195,12 @@
         loadError: (e) => `读库失败：${e}`,
         langBtn: "EN",
         share: "分享",
+        copyText: "复制",
+        copyQuote: "复制原文",
         copyImage: "复制图片",
         copied: "已复制",
         copyFailed: "复制失败，请改用下载",
+        copyTextFailed: "复制失败",
         download: "下载",
         close: "关闭",
         shareAlt: "笔记分享图",
@@ -206,9 +223,12 @@
         loadError: (e) => `Could not read the library: ${e}`,
         langBtn: "中文",
         share: "Share",
+        copyText: "Copy",
+        copyQuote: "Copy quote",
         copyImage: "Copy image",
         copied: "Copied",
         copyFailed: "Copy failed. Download instead.",
+        copyTextFailed: "Copy failed",
         download: "Download",
         close: "Close",
         shareAlt: "Shared note image",
@@ -221,8 +241,7 @@
     const state = {
       data: null,
       bookId: null,
-      chapterId: "all",
-      section: "",
+      path: [],
       notesOnly: true,
       q: "",
       lang: savedLang || (navigator.language.startsWith("zh") ? "zh" : "en"),
@@ -264,16 +283,62 @@
       return (state.data?.books || []).find((b) => b.id === state.bookId) || state.data?.books?.[0];
     }
 
-    function itemCount(items) {
-      return items.filter((i) => !state.notesOnly || i.note).length;
+    function itemHeadings(item, chapterTitle) {
+      if (item.headings && item.headings.length) return item.headings;
+      return chapterTitle ? [chapterTitle] : [];
     }
 
-    function uniqueSections(ch) {
-      const names = [];
-      for (const item of ch.items) {
-        if (item.section && !names.includes(item.section)) names.push(item.section);
+    function pathEqual(a, b) {
+      return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+    }
+
+    function pathPrefix(headings, prefix) {
+      return prefix.every((v, i) => headings[i] === v);
+    }
+
+    function flattenItems(book) {
+      const out = [];
+      for (const ch of book.chapters) {
+        for (const item of ch.items) {
+          out.push({ ...item, chapter: ch.title, headings: itemHeadings(item, ch.title) });
+        }
       }
-      return names;
+      return out;
+    }
+
+    function buildToc(book) {
+      const root = { title: "", path: [], children: [], count: 0 };
+      for (const item of flattenItems(book)) {
+        if (state.notesOnly && !item.note) continue;
+        let node = root;
+        node.count += 1;
+        const trail = [];
+        for (const title of item.headings) {
+          trail.push(title);
+          let child = node.children.find((c) => c.title === title);
+          if (!child) {
+            child = { title, path: trail.slice(), children: [], count: 0 };
+            node.children.push(child);
+          }
+          child.count += 1;
+          node = child;
+        }
+      }
+      return root;
+    }
+
+    function pathExists(root, path) {
+      let node = root;
+      for (const title of path) {
+        node = node.children.find((c) => c.title === title);
+        if (!node) return false;
+      }
+      return true;
+    }
+
+    function itemLocation(item) {
+      if (item.headings && item.headings.length) return item.headings.join(" · ");
+      return [item.chapter, item.section].filter(Boolean).join(" · ");
     }
 
     function saveView() {
@@ -281,8 +346,7 @@
       const aside = document.querySelector("aside");
       localStorage.setItem(VIEW_KEY, JSON.stringify({
         bookId: state.bookId,
-        chapterId: state.chapterId,
-        section: state.section,
+        path: state.path,
         notesOnly: state.notesOnly,
         q: state.q,
         mainScroll: main ? main.scrollTop : 0,
@@ -300,13 +364,25 @@
       const books = data.books || [];
       const book = books.find((b) => b.id === saved.bookId) || books[0];
       state.bookId = book?.id || null;
-      const ch = book?.chapters?.find((c) => c.id === saved.chapterId);
-      state.chapterId = ch ? saved.chapterId : "all";
-      state.section = ch && saved.section && uniqueSections(ch).includes(saved.section)
-        ? saved.section
-        : "";
+      let path = Array.isArray(saved.path) ? saved.path.slice() : [];
+      if (!path.length && book) {
+        if (saved.section) {
+          for (const item of flattenItems(book)) {
+            const idx = item.headings.indexOf(saved.section);
+            if (idx >= 0) {
+              path = item.headings.slice(0, idx + 1);
+              break;
+            }
+          }
+        } else if (saved.chapterId) {
+          const ch = book.chapters.find((c) => c.id === saved.chapterId);
+          if (ch?.title) path = [ch.title];
+        }
+      }
       if (typeof saved.notesOnly === "boolean") state.notesOnly = saved.notesOnly;
       if (typeof saved.q === "string") state.q = saved.q;
+      if (book && path.length && !pathExists(buildToc(book), path)) path = [];
+      state.path = path;
       state._scroll = { main: saved.mainScroll || 0, nav: saved.navScroll || 0 };
     }
 
@@ -319,27 +395,31 @@
 
     function visibleItems(book) {
       const q = state.q.trim().toLowerCase();
-      const chapters = state.chapterId === "all"
-        ? book.chapters
-        : book.chapters.filter((c) => c.id === state.chapterId);
       const out = [];
-      for (const ch of chapters) {
-        for (const item of ch.items) {
-          if (state.notesOnly && !item.note) continue;
-          if (state.section && item.section !== state.section) continue;
-          const blob = `${item.quote}\n${item.note}\n${item.section}\n${ch.title}`.toLowerCase();
-          if (q && !blob.includes(q)) continue;
-          out.push({ ...item, chapter: ch.title });
-        }
+      for (const item of flattenItems(book)) {
+        if (state.notesOnly && !item.note) continue;
+        if (state.path.length && !pathPrefix(item.headings, state.path)) continue;
+        const blob = `${item.quote}\n${item.note}\n${item.headings.join("\n")}`.toLowerCase();
+        if (q && !blob.includes(q)) continue;
+        out.push(item);
       }
       return out;
     }
 
     function pageTitle(book) {
-      if (state.chapterId === "all") return t("allChapters");
-      const ch = book.chapters.find((c) => c.id === state.chapterId);
-      if (!ch) return "";
-      return state.section ? `${ch.title} · ${state.section}` : ch.title;
+      return state.path.length ? state.path.join(" · ") : t("allChapters");
+    }
+
+    function renderTocNodes(nodes, parts) {
+      for (const node of nodes) {
+        if (node.count === 0) continue;
+        const depth = Math.min(node.path.length - 1, 5);
+        const on = pathEqual(state.path, node.path) ? " active" : "";
+        parts.push(`<button class="toc d${depth}${on}" data-path="${encodeURIComponent(JSON.stringify(node.path))}">
+          <div class="t">${esc(node.title)} <span class="count">${node.count}</span></div>
+        </button>`);
+        renderTocNodes(node.children, parts);
+      }
     }
 
     function renderNav(book) {
@@ -352,41 +432,28 @@
           <div class="m">${esc(b.author)} · ${t("meta", b.noteCount, b.highlightCount)}</div>
         </button>`);
       }
+      const toc = buildToc(book);
       parts.push(`<h1 style='margin-top:18px'>${t("chapters")}</h1>`);
-      const allCount = itemCount(book.chapters.flatMap((c) => c.items));
-      parts.push(`<button class="chapter${state.chapterId === "all" ? " active" : ""}" data-ch="all" data-sec="">
-        <div class="t">${t("allChapters")} <span class="count">${allCount}</span></div>
+      parts.push(`<button class="chapter${state.path.length === 0 ? " active" : ""}" data-path="${encodeURIComponent("[]")}">
+        <div class="t">${t("allChapters")} <span class="count">${toc.count}</span></div>
       </button>`);
-      for (const ch of book.chapters) {
-        const n = itemCount(ch.items);
-        if (n === 0) continue;
-        const chOn = state.chapterId === ch.id && !state.section;
-        parts.push(`<button class="chapter${chOn ? " active" : ""}" data-ch="${esc(ch.id)}" data-sec="">
-          <div class="t">${esc(ch.title)} <span class="count">${n}</span></div>
-        </button>`);
-        for (const sec of uniqueSections(ch)) {
-          const sn = itemCount(ch.items.filter((i) => i.section === sec));
-          if (sn === 0) continue;
-          const on = state.chapterId === ch.id && state.section === sec;
-          parts.push(`<button class="section${on ? " active" : ""}" data-ch="${esc(ch.id)}" data-sec="${esc(sec)}">
-            <div class="t">${esc(sec)} <span class="count">${sn}</span></div>
-          </button>`);
-        }
-      }
+      renderTocNodes(toc.children, parts);
       $("nav").innerHTML = parts.join("");
       $("nav").querySelectorAll("[data-book]").forEach((el) => {
         el.onclick = () => {
           state.bookId = el.dataset.book;
-          state.chapterId = "all";
-          state.section = "";
+          state.path = [];
           state._scroll.main = 0;
           render();
         };
       });
-      $("nav").querySelectorAll("[data-ch]").forEach((el) => {
+      $("nav").querySelectorAll("[data-path]").forEach((el) => {
         el.onclick = () => {
-          state.chapterId = el.dataset.ch;
-          state.section = el.dataset.sec || "";
+          try {
+            state.path = JSON.parse(decodeURIComponent(el.dataset.path || "[]"));
+          } catch {
+            state.path = [];
+          }
           state._scroll.main = 0;
           render();
         };
@@ -402,17 +469,27 @@
       }
       $("content").innerHTML = title + items.map((item, idx) => `
         <article class="card s${item.style || 0}">
-          <div class="sec">${esc(item.chapter)}${item.section ? " · " + esc(item.section) : ""}</div>
+          <div class="sec">${esc((item.headings || []).join(" · "))}</div>
           ${item.quote ? `<div class="label">${t("quote")}</div><div class="quote">${esc(item.quote)}</div>` : ""}
           ${item.note ? `<div class="label">${t("note")}</div><div class="note">${esc(item.note)}</div>` : ""}
           <div class="meta">
             <span>${fmt(item.created)}</span>
-            <button class="share-btn" type="button" data-share="${idx}">${t("share")}</button>
+            <div class="meta-actions">
+              ${item.note && item.quote ? `<button class="share-btn" type="button" data-copy-quote="${idx}">${t("copyQuote")}</button>` : ""}
+              <button class="share-btn" type="button" data-copy="${idx}">${t("copyText")}</button>
+              <button class="share-btn" type="button" data-share="${idx}">${t("share")}</button>
+            </div>
           </div>
         </article>
       `).join("");
       $("content").querySelectorAll("[data-share]").forEach((el) => {
         el.onclick = () => openShare(items[Number(el.dataset.share)], book);
+      });
+      $("content").querySelectorAll("[data-copy]").forEach((el) => {
+        el.onclick = () => copyPlainText(noteShareText(items[Number(el.dataset.copy)], book), el);
+      });
+      $("content").querySelectorAll("[data-copy-quote]").forEach((el) => {
+        el.onclick = () => copyPlainText(items[Number(el.dataset.copyQuote)].quote || "", el);
       });
     }
 
@@ -495,7 +572,7 @@
         ctx.fillText(fit(ctx, book.author, inner), pad, y);
         y += 20;
       }
-      const loc = [item.chapter, item.section].filter(Boolean).join(" · ");
+      const loc = itemLocation(item);
       ctx.fillStyle = "#b4532a";
       ctx.font = fontMeta;
       ctx.fillText(fit(ctx, loc, inner), pad, y);
@@ -595,12 +672,62 @@
         .replaceAll('"', "&quot;");
     }
 
-    function flashSynced() {
+    function noteShareText(item, book) {
+      const loc = itemLocation(item);
+      const lines = [];
+      if (book.title) lines.push(book.title);
+      if (book.author) lines.push(book.author);
+      if (loc) lines.push(loc);
+      if (lines.length) lines.push("");
+      if (item.quote) {
+        lines.push(t("quote"));
+        lines.push(item.quote);
+        lines.push("");
+      }
+      if (item.note) {
+        lines.push(t("note"));
+        lines.push(item.note);
+      }
+      return lines.join("\n").trim() + "\n";
+    }
+
+    async function copyPlainText(text, button) {
+      const prev = button.textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        button.textContent = t("copied");
+        flashToast(t("copied"));
+        setTimeout(() => { button.textContent = prev; }, 1400);
+      } catch {
+        try {
+          const area = document.createElement("textarea");
+          area.value = text;
+          area.style.position = "fixed";
+          area.style.left = "-9999px";
+          document.body.appendChild(area);
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+          button.textContent = t("copied");
+          flashToast(t("copied"));
+          setTimeout(() => { button.textContent = prev; }, 1400);
+        } catch {
+          button.textContent = t("copyTextFailed");
+          setTimeout(() => { button.textContent = prev; }, 1800);
+        }
+      }
+    }
+
+    function flashToast(msg) {
       const el = $("toast");
-      el.textContent = t("synced");
+      el.textContent = msg;
       el.classList.add("show");
-      clearTimeout(flashSynced._t);
-      flashSynced._t = setTimeout(() => el.classList.remove("show"), 1400);
+      clearTimeout(flashToast._t);
+      flashToast._t = setTimeout(() => el.classList.remove("show"), 1400);
+    }
+
+    function flashSynced() {
+      flashToast(t("synced"));
     }
 
     async function load(opts = {}) {

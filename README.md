@@ -43,8 +43,8 @@ If the page or script cannot read the library, grant **Full Disk Access** to Ter
 ## What you get
 
 - Full original quote and full note, no truncation
-- Nested table of contents from EPUB locations (chapter and subsection)
-- Click a subsection to see only that subsection
+- Nested table of contents: chapter and section from the note location; deeper headings only when the EPUB file confirms them
+- Click any heading to see notes in that heading and its descendants
 - Filter to notes-only, and search across quote + comment
 - Share a note as an image, preview it, and copy the image
 - Chinese / English UI (follows the browser language, toggle in the toolbar)
@@ -59,7 +59,7 @@ Apple Books stores:
 | Book list | `~/Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary/` |
 | Highlights & notes | `~/Library/Containers/com.apple.iBooksX/Data/Documents/AEAnnotation/` |
 
-Each annotation has `ZANNOTATIONSELECTEDTEXT` (quote), `ZANNOTATIONNOTE` (your comment), and `ZANNOTATIONLOCATION` (EPUB CFI). Chapter and section titles are parsed from the CFI, which is why subsections that never appear in the Books TOC still show up here.
+Each annotation has `ZANNOTATIONSELECTEDTEXT` (quote), `ZANNOTATIONNOTE` (your comment), and `ZANNOTATIONLOCATION` (EPUB CFI). Chapter and section come from the CFI start path. Deeper headings are added only when the local EPUB marks them with an explicit level (for example Pandoc `class="level3"`), so extra index levels are omitted rather than guessed.
 
 The server copies the databases into memory with SQLite `backup()` so the live Books files are never written.
 
@@ -80,6 +80,6 @@ MIT
 Apple Books 侧栏会截断原文和评论，点进去还会跳页。这个仓库提供：
 
 1. **Skill**：`npx skills add yufanghui/books-notes -g` 之后，在对话里让 AI 按书/章/节取出完整原文和评论。
-2. **本地网页**：`python3 serve.py`，按章节浏览，还可生成分享图。
+2. **本地网页**：`python3 serve.py`，按章节浏览（能核对时才展开更深标题），还可生成分享图。
 
 读库失败时，给终端 / Cursor 开一下「完全磁盘访问权限」。

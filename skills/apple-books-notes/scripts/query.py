@@ -8,7 +8,9 @@ import json
 import re
 import sqlite3
 import sys
+import zipfile
 from datetime import datetime, timezone
+from html import unescape
 from pathlib import Path
 
 HOME = Path.home()
@@ -17,6 +19,11 @@ LIB_DIR = HOME / "Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary"
 CORE_DATA_EPOCH = 978307200
 CFI_SPINE = re.compile(r"epubcfi\(/6/(\d+)(?:\[([^\]]+)\])?")
 CFI_HEADINGS = re.compile(r"\[([^\]]+)\]")
+SECTION_OPEN = re.compile(r"<section\b([^>]*)>", re.I)
+HEADING_AFTER = re.compile(r"\s*<h([1-6])\b[^>]*>(.*?)</h\1>", re.I | re.S)
+SKIP_XHTML = {"nav.xhtml", "nav.html", "cover.xhtml", "title_page.xhtml", "toc.xhtml"}
+MAX_UNVERIFIED_HEADINGS = 2
+_HEADING_CACHE: dict[tuple[str, int], dict[str, list[str]]] = {}
 
 
 def latest_sqlite(directory: Path) -> Path:
@@ -70,21 +77,112 @@ def apple_date(value) -> str | None:
     return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
-def parse_cfi(cfi: str | None) -> dict:
+def _clean_heading(text: str) -> str:
+    text = re.sub(r"[- ]\d+$", "", text).replace("-", " ").strip()
+    return text
+
+
+def _attr(attrs: str, name: str) -> str | None:
+    m = re.search(rf"""\b{name}\s*=\s*["']([^"']+)["']""", attrs, re.I)
+    return m.group(1) if m else None
+
+
+def _plain_html(html: str) -> str:
+    return unescape(re.sub(r"<[^>]+>", "", html)).replace("\xa0", " ").strip()
+
+
+def _cfi_start_path(cfi: str) -> str:
+    """Range CFI is epubcfi(common, start, end). Ignore the end so sibling sections stay siblings."""
+    inner = cfi.strip()
+    if inner.lower().startswith("epubcfi(") and inner.endswith(")"):
+        inner = inner[8:-1]
+    parts = inner.split(",")
+    if len(parts) >= 2:
+        return parts[0] + parts[1]
+    return inner
+
+
+def _iter_epub_html(path: Path):
+    if path.is_dir():
+        for p in sorted(path.rglob("*")):
+            if p.suffix.lower() in {".xhtml", ".html"} and p.name.lower() not in SKIP_XHTML:
+                yield p.read_text(encoding="utf-8", errors="replace")
+        return
+    if path.is_file() and path.suffix.lower() == ".epub":
+        with zipfile.ZipFile(path) as z:
+            for name in z.namelist():
+                if Path(name).suffix.lower() in {".xhtml", ".html"} and Path(name).name.lower() not in SKIP_XHTML:
+                    yield z.read(name).decode("utf-8", errors="replace")
+
+
+def load_heading_map(epub_path: str | None) -> dict[str, list[str]]:
+    """Map EPUB section id -> ancestor heading titles, including self.
+
+    Only sections with an explicit level class (e.g. Pandoc ``class="level3"``)
+    are indexed. Deeper headings are omitted unless the EPUB confirms them.
+    """
+    if not epub_path or not str(epub_path).lower().endswith(".epub"):
+        return {}
+    path = Path(epub_path)
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    cache_key = (str(path), mtime)
+    cached = _HEADING_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    index: dict[str, list[str]] = {}
+    try:
+        for html in _iter_epub_html(path):
+            stack: list[tuple[int, str]] = []
+            for m in SECTION_OPEN.finditer(html):
+                sid = _attr(m.group(1), "id")
+                cls = _attr(m.group(1), "class") or ""
+                level_m = re.search(r"level(\d+)", cls)
+                if not sid or not level_m:
+                    continue
+                level = int(level_m.group(1))
+                hm = HEADING_AFTER.match(html[m.end() :])
+                title = _plain_html(hm.group(2)) if hm else ""
+                if not title:
+                    title = _clean_heading(sid)
+                while stack and stack[-1][0] >= level:
+                    stack.pop()
+                stack.append((level, title))
+                index[sid] = [t for _, t in stack]
+    except (OSError, zipfile.BadZipFile, UnicodeDecodeError):
+        index = {}
+    _HEADING_CACHE[cache_key] = index
+    return index
+
+
+def parse_cfi(cfi: str | None, heading_map: dict[str, list[str]] | None = None) -> dict:
     if not cfi:
-        return {"spine": 10**9, "file_id": "unknown", "chapter": "Ungrouped", "section": ""}
+        return {"spine": 10**9, "file_id": "unknown", "headings": [], "chapter": "Ungrouped", "section": ""}
     spine_m = CFI_SPINE.search(cfi)
     spine = int(spine_m.group(1)) if spine_m else 10**9
     file_id = (spine_m.group(2) if spine_m else None) or "unknown"
-    after = cfi.split("!", 1)[-1] if "!" in cfi else ""
-    heads = CFI_HEADINGS.findall(after)
-    chapter = heads[0] if heads else file_id
-    section = heads[1] if len(heads) > 1 else ""
-    chapter = re.sub(r"[- ]\d+$", "", chapter).replace("-", " ")
-    section = re.sub(r"[- ]\d+$", "", section).replace("-", " ")
+    after = _cfi_start_path(cfi)
+    after = after.split("!", 1)[-1] if "!" in after else after
+    raw_ids = CFI_HEADINGS.findall(after)
+    headings: list[str] = []
+    if heading_map:
+        for hid in reversed(raw_ids):
+            path = heading_map.get(hid)
+            if path:
+                headings = path
+                break
+    if not headings:
+        # CFI ids are not heading levels. Without EPUB confirmation, keep
+        # chapter + section only rather than guessing a 3rd+ level.
+        headings = [_clean_heading(h) for h in raw_ids if h][:MAX_UNVERIFIED_HEADINGS]
+    chapter = headings[0] if headings else file_id
+    section = headings[1] if len(headings) > 1 else ""
     return {
         "spine": spine,
         "file_id": file_id,
+        "headings": headings,
         "chapter": chapter,
         "section": section,
     }
@@ -94,20 +192,22 @@ def load_library() -> dict:
     ann = readonly_backup(latest_sqlite(ANN_DIR))
     lib = readonly_backup(latest_sqlite(LIB_DIR))
     try:
-        assets = {
-            row["ZASSETID"]: {
+        asset_paths: dict[str, str | None] = {}
+        assets = {}
+        heading_maps: dict[str, dict[str, list[str]]] = {}
+        for row in lib.execute(
+            """
+            SELECT ZASSETID, ZTITLE, ZAUTHOR, ZPATH
+            FROM ZBKLIBRARYASSET
+            WHERE ZASSETID IS NOT NULL
+            """
+        ):
+            assets[row["ZASSETID"]] = {
                 "id": row["ZASSETID"],
                 "title": row["ZTITLE"] or "Untitled",
                 "author": row["ZAUTHOR"] or "",
             }
-            for row in lib.execute(
-                """
-                SELECT ZASSETID, ZTITLE, ZAUTHOR
-                FROM ZBKLIBRARYASSET
-                WHERE ZASSETID IS NOT NULL
-                """
-            )
-        }
+            asset_paths[row["ZASSETID"]] = row["ZPATH"]
 
         books: dict[str, dict] = {}
         for row in ann.execute(
@@ -148,7 +248,11 @@ def load_library() -> dict:
                     "lastModified": None,
                 },
             )
-            loc = parse_cfi(row["ZANNOTATIONLOCATION"])
+            hmap = heading_maps.get(asset_id)
+            if hmap is None:
+                hmap = load_heading_map(asset_paths.get(asset_id))
+                heading_maps[asset_id] = hmap
+            loc = parse_cfi(row["ZANNOTATIONLOCATION"], hmap)
             chapter = book["chapters"].setdefault(
                 loc["file_id"],
                 {
@@ -170,6 +274,7 @@ def load_library() -> dict:
                 {
                     "quote": quote,
                     "note": note,
+                    "headings": loc["headings"],
                     "section": loc["section"],
                     "style": row["ZANNOTATIONSTYLE"] or 0,
                     "created": apple_date(row["ZANNOTATIONCREATIONDATE"]),
@@ -206,16 +311,23 @@ def filter_library(
             continue
         chapters = []
         for ch in b.get("chapters", []):
-            if chapter and not _match(ch.get("title", ""), chapter):
-                continue
             items = []
             for item in ch.get("items", []):
+                heads = item.get("headings") or []
                 if notes_only and not item.get("note"):
                     continue
-                if section and not _match(item.get("section", ""), section):
+                if chapter and not (
+                    _match(ch.get("title", ""), chapter)
+                    or any(_match(h, chapter) for h in heads)
+                ):
+                    continue
+                if section and not any(_match(h, section) for h in heads[1:] or heads):
                     continue
                 if query:
-                    blob = f"{item.get('quote','')}\n{item.get('note','')}\n{item.get('section','')}\n{ch.get('title','')}"
+                    blob = (
+                        f"{item.get('quote','')}\n{item.get('note','')}\n"
+                        f"{' '.join(heads)}\n{ch.get('title','')}"
+                    )
                     if not _match(blob, query):
                         continue
                 items.append(item)
@@ -234,14 +346,13 @@ def to_markdown(data: dict) -> str:
             parts.append(b["author"])
         parts.append("")
         for ch in b.get("chapters", []):
-            parts.append(f"## {ch.get('title') or ch.get('id')}")
-            current_section = None
+            last_path: list[str] = []
             for item in ch.get("items", []):
-                sec = item.get("section") or ""
-                if sec != current_section:
-                    current_section = sec
-                    if sec:
-                        parts.append(f"### {sec}")
+                path = item.get("headings") or ([ch.get("title")] if ch.get("title") else [])
+                for i, heading in enumerate(path):
+                    if i >= len(last_path) or last_path[i] != heading:
+                        parts.append(f"{'#' * (i + 2)} {heading}")
+                last_path = path
                 if item.get("quote"):
                     parts.append("**原文**")
                     parts.append(item["quote"])

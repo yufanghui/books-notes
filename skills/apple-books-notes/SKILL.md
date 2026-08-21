@@ -31,8 +31,8 @@ If the command fails with a database/permission error: tell the user to open the
 ## Workflow
 
 1. If the book is unknown, `--list` first.
-2. Fetch notes with the tightest filters (`--book`, `--chapter`, `--section`, `--query`, `--notes-only`).
-3. Answer from the script output. Keep **原文** and **评论** in full. Group by chapter, then section.
+2. Fetch notes with the tightest filters (`--book`, `--chapter`, `--section`, `--query`, `--notes-only`). `--section` matches any heading in the path. Paths deeper than chapter/section appear only when the EPUB confirms them; otherwise stop at two levels.
+3. Answer from the script output. Keep **原文** and **评论** in full. Group by the heading path (`##` / `###` / `####` …).
 4. When the user is reviewing thoughts, pass `--notes-only`. Include bare highlights only if they ask for 划线/highlights.
 5. Reply in the user's language.
 
@@ -70,7 +70,7 @@ JSON (only when you need structured data):
 python3 skills/apple-books-notes/scripts/query.py --book "Swift" --json
 ```
 
-Default stdout is Markdown: `# book` / `## chapter` / `### section` / **原文** / **评论**.
+Default stdout is Markdown: `# book` / nested headings (`##` chapter, `###` section, deeper only if verified) / **原文** / **评论**.
 
 When the skill is installed standalone, replace `skills/apple-books-notes/scripts/query.py` with the `scripts/query.py` path beside `SKILL.md`.
 
